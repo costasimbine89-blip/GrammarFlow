@@ -18,7 +18,10 @@ import {
   Settings,
   User,
   ArrowLeft,
-  Loader2
+  Loader2,
+  Twitter,
+  Facebook,
+  Share2
 } from 'lucide-react';
 import { 
   LineChart, 
@@ -38,7 +41,7 @@ import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import Markdown from 'react-markdown';
 
-import { Level, Question, QuizSession, UserStats } from './types';
+import { Level, Question, QuizSession, UserStats, QuizMode } from './types';
 import { STATIC_QUESTIONS } from './constants';
 import { explainGrammar, generateQuickQuiz } from './services/geminiService';
 
@@ -56,6 +59,20 @@ export default function App() {
   const [explanation, setExplanation] = useState<string | null>(null);
   const [isExplaining, setIsExplaining] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [timeLeft, setTimeLeft] = useState<number | null>(null);
+
+  // Timer for Blitz mode
+  useEffect(() => {
+    let timer: any;
+    if (view === 'quiz' && session?.mode === 'Blitz' && timeLeft !== null && timeLeft > 0 && !selectedOption) {
+      timer = setInterval(() => {
+        setTimeLeft(prev => (prev !== null && prev > 0) ? prev - 1 : 0);
+      }, 1000);
+    } else if (timeLeft === 0 && view === 'quiz' && !selectedOption) {
+      handleAnswer(''); // Auto-submit empty answer when time runs out
+    }
+    return () => clearInterval(timer);
+  }, [view, session, timeLeft, selectedOption]);
 
   // Mock initial stats
   const [stats, setStats] = useState<UserStats>({
@@ -79,15 +96,17 @@ export default function App() {
       { date: 'Mar 01', score: 95 },
     ],
     achievements: [
-      { id: '1', name: 'Grammar Guru', icon: 'Trophy', unlocked: true, date: '2026-02-15' },
-      { id: '2', name: 'Fast Learner', icon: 'Zap', unlocked: true, date: '2026-02-20' },
-      { id: '3', name: 'Perfect Score', icon: 'CheckCircle2', unlocked: true, date: '2026-02-25' },
-      { id: '4', name: 'Bookworm', icon: 'BookOpen', unlocked: false },
-      { id: '5', name: 'Streak Master', icon: 'Zap', unlocked: true, date: '2026-03-01' },
-    ]
+      { id: '1', name: 'First Step', icon: 'Zap', unlocked: true, date: '2026-02-10', description: 'Complete your first quiz' },
+      { id: '2', name: 'Perfect 10', icon: 'CheckCircle2', unlocked: true, date: '2026-02-15', description: 'Get 100% accuracy' },
+      { id: '3', name: 'Blitz Runner', icon: 'Zap', unlocked: false, description: 'Complete a Blitz mode challenge' },
+      { id: '4', name: 'Grammar Guru', icon: 'Trophy', unlocked: true, date: '2026-02-20', description: 'Complete 10 quizzes' },
+      { id: '5', name: 'Expert Explorer', icon: 'BookOpen', unlocked: false, description: 'Try an Expert level quiz' },
+      { id: '6', name: 'Fast Fingers', icon: 'Zap', unlocked: false, description: '80%+ accuracy in Blitz mode' },
+    ],
+    completedLevels: ['Beginner']
   });
 
-  const startQuiz = async (selectedLevel: Level, useAI: boolean = false) => {
+  const startQuiz = async (selectedLevel: Level, useAI: boolean = false, mode: QuizMode = 'Standard') => {
     setLevel(selectedLevel);
     setIsGenerating(true);
     
@@ -103,14 +122,24 @@ export default function App() {
       questions = STATIC_QUESTIONS[selectedLevel];
     }
 
+    // Shuffle questions for Blitz mode
+    if (mode === 'Blitz') {
+      questions = [...questions].sort(() => Math.random() - 0.5).slice(0, 15);
+      setTimeLeft(20); // 20 seconds per question for Blitz
+    } else {
+      setTimeLeft(null);
+    }
+
     setSession({
       id: Math.random().toString(36).substr(2, 9),
       level: selectedLevel,
+      mode,
       questions,
       currentQuestionIndex: 0,
       answers: {},
       score: 0,
       startTime: Date.now(),
+      timeLeft: mode === 'Blitz' ? 60 : undefined,
     });
     setView('quiz');
     setIsGenerating(false);
@@ -145,6 +174,7 @@ export default function App() {
       setSession(prev => prev ? { ...prev, currentQuestionIndex: prev.currentQuestionIndex + 1 } : null);
       setSelectedOption(null);
       setExplanation(null);
+      if (session.mode === 'Blitz') setTimeLeft(20);
     } else {
       finishQuiz();
     }
@@ -154,15 +184,72 @@ export default function App() {
     if (!session) return;
     
     const finalScore = Math.round((session.score / session.questions.length) * 100);
-    setStats(prev => ({
-      ...prev,
-      totalQuizzes: prev.totalQuizzes + 1,
-      recentScores: [...prev.recentScores.slice(-5), { 
-        date: new Date().toLocaleDateString('en-US', { month: 'short', day: '2-digit' }), 
-        score: finalScore 
-      }]
-    }));
+    const isPerfect = session.score === session.questions.length;
+    const isBlitz = session.mode === 'Blitz';
+    const isExpert = session.level === 'Expert';
+
+    setStats(prev => {
+      const newTotalQuizzes = prev.totalQuizzes + 1;
+      const newCompletedLevels = prev.completedLevels.includes(session.level) 
+        ? prev.completedLevels 
+        : [...prev.completedLevels, session.level];
+
+      const updatedAchievements = prev.achievements.map(achievement => {
+        if (achievement.unlocked) return achievement;
+
+        let shouldUnlock = false;
+        if (achievement.id === '1' && newTotalQuizzes >= 1) shouldUnlock = true;
+        if (achievement.id === '2' && isPerfect) shouldUnlock = true;
+        if (achievement.id === '3' && isBlitz) shouldUnlock = true;
+        if (achievement.id === '4' && newTotalQuizzes >= 10) shouldUnlock = true;
+        if (achievement.id === '5' && isExpert) shouldUnlock = true;
+        if (achievement.id === '6' && isBlitz && finalScore >= 80) shouldUnlock = true;
+
+        if (shouldUnlock) {
+          return { ...achievement, unlocked: true, date: new Date().toISOString().split('T')[0] };
+        }
+        return achievement;
+      });
+
+      return {
+        ...prev,
+        totalQuizzes: newTotalQuizzes,
+        completedLevels: newCompletedLevels,
+        achievements: updatedAchievements,
+        recentScores: [...prev.recentScores.slice(-5), { 
+          date: new Date().toLocaleDateString('en-US', { month: 'short', day: '2-digit' }), 
+          score: finalScore 
+        }]
+      };
+    });
     setView('results');
+  };
+
+  const shareOnTwitter = () => {
+    if (!session) return;
+    const score = Math.round((session.score / session.questions.length) * 100);
+    const text = `I just scored ${score}% on Express Grammar AI! 🚀 Can you beat my score? #EnglishLearning #GrammarFlow`;
+    const url = `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`;
+    window.open(url, '_blank');
+  };
+
+  const shareOnFacebook = () => {
+    if (!session) return;
+    const url = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(window.location.href)}`;
+    window.open(url, '_blank');
+  };
+
+  const getPlayerTitle = () => {
+    if (stats.totalQuizzes > 50) return 'Grammar Legend';
+    if (stats.totalQuizzes > 20) return 'Elite Grammarian';
+    if (stats.totalQuizzes > 10) return 'Grammar Pro';
+    return 'Grammar Novice';
+  };
+
+  const getPlayerRank = () => {
+    const baseRank = 5000;
+    const reduction = stats.totalQuizzes * 50 + stats.averageScore * 10;
+    return Math.max(1, baseRank - reduction);
   };
 
   const radarData = useMemo(() => {
@@ -206,79 +293,109 @@ export default function App() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
-              className="space-y-8"
+              className="space-y-6"
             >
               <section>
                 <h2 className="text-3xl font-serif font-bold leading-tight mb-2">
-                  Master English <br />
-                  <span className="text-indigo-600 italic">Effortlessly.</span>
+                  Express <br />
+                  <span className="text-indigo-600 italic">English.</span>
                 </h2>
-                <p className="text-slate-500 text-sm">Personalized grammar tests powered by AI to help you reach fluency faster.</p>
+                <p className="text-slate-500 text-sm">Bite-sized grammar challenges to master English in minutes.</p>
               </section>
 
-              <div className="grid grid-cols-1 gap-4">
-                {(['Beginner', 'Intermediate', 'Advanced', 'Expert'] as Level[]).map((lvl) => (
-                  <button
-                    key={lvl}
-                    onClick={() => startQuiz(lvl)}
-                    className="group relative p-5 bg-white border border-slate-100 rounded-2xl text-left hover:border-indigo-200 hover:shadow-xl hover:shadow-indigo-500/5 transition-all duration-300 overflow-hidden"
-                  >
-                    <div className="flex items-center justify-between mb-2">
-                      <span className={cn(
-                        "text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md",
-                        lvl === 'Beginner' ? "bg-emerald-50 text-emerald-600" :
-                        lvl === 'Intermediate' ? "bg-amber-50 text-amber-600" :
-                        lvl === 'Advanced' ? "bg-rose-50 text-rose-600" :
-                        "bg-violet-50 text-violet-600"
-                      )}>
-                        {lvl}
-                      </span>
-                      <ChevronRight size={16} className="text-slate-300 group-hover:text-indigo-500 group-hover:translate-x-1 transition-all" />
+              <section className="p-5 bg-linear-to-br from-indigo-500 to-violet-600 rounded-3xl text-white shadow-xl shadow-indigo-200 relative overflow-hidden">
+                <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full blur-3xl -mr-16 -mt-16" />
+                <div className="relative z-10">
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <h3 className="text-lg font-bold">Daily Goal</h3>
+                      <p className="text-xs text-indigo-100">3/5 Quizzes completed</p>
                     </div>
-                    <h3 className="font-bold text-slate-800">{lvl} Grammar Mastery</h3>
-                    <p className="text-xs text-slate-400 mt-1">
-                      {lvl === 'Beginner' ? 'Foundations, basic tenses, and articles.' :
-                       lvl === 'Intermediate' ? 'Complex structures and conditionals.' :
-                       lvl === 'Advanced' ? 'Advanced inversion, subjunctive, and nuances.' :
-                       'Mastery of rare structures and linguistic subtleties.'}
-                    </p>
-                    <div className="mt-4 h-1.5 w-full bg-slate-50 rounded-full overflow-hidden">
-                      <motion.div 
-                        initial={{ width: 0 }}
-                        animate={{ width: `${stats.levelProgress[lvl]}%` }}
-                        transition={{ type: 'spring', damping: 20, stiffness: 80, delay: 0.2 }}
-                        className={cn(
-                          "h-full rounded-full relative",
-                          lvl === 'Beginner' ? "bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.3)]" :
-                          lvl === 'Intermediate' ? "bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.3)]" :
-                          lvl === 'Advanced' ? "bg-rose-400 shadow-[0_0_8px_rgba(251,113,133,0.3)]" :
-                          "bg-violet-400 shadow-[0_0_8px_rgba(167,139,250,0.3)]"
-                        )}
-                      >
-                        <motion.div 
-                          animate={{ x: ['-100%', '200%'] }}
-                          transition={{ repeat: Infinity, duration: 2, ease: "linear" }}
-                          className="absolute inset-0 bg-linear-to-r from-transparent via-white/30 to-transparent"
-                        />
-                      </motion.div>
+                    <div className="w-12 h-12 rounded-full border-4 border-white/20 flex items-center justify-center text-[10px] font-bold">
+                      60%
                     </div>
-                  </button>
-                ))}
+                  </div>
+                  <div className="h-2 bg-white/20 rounded-full overflow-hidden">
+                    <motion.div 
+                      initial={{ width: 0 }}
+                      animate={{ width: '60%' }}
+                      className="h-full bg-white rounded-full"
+                    />
+                  </div>
+                </div>
+              </section>
+
+              {/* Quick Action Cards */}
+              <div className="grid grid-cols-2 gap-4">
+                <button 
+                  onClick={() => startQuiz(preferredLevel, aiQuizEnabled, 'Blitz')}
+                  className="p-5 bg-indigo-600 rounded-3xl text-white text-left relative overflow-hidden group shadow-lg shadow-indigo-200"
+                >
+                  <div className="absolute top-0 right-0 p-2 opacity-20 group-hover:scale-125 transition-transform">
+                    <Zap size={48} fill="currentColor" />
+                  </div>
+                  <Zap size={24} className="mb-3" fill="currentColor" />
+                  <h3 className="font-bold text-lg">Blitz</h3>
+                  <p className="text-[10px] text-indigo-100 font-medium uppercase tracking-wider">60s Challenge</p>
+                </button>
+                <button 
+                  onClick={() => startQuiz(preferredLevel, aiQuizEnabled, 'Standard')}
+                  className="p-5 bg-slate-900 rounded-3xl text-white text-left relative overflow-hidden group shadow-lg shadow-slate-200"
+                >
+                  <div className="absolute top-0 right-0 p-2 opacity-20 group-hover:scale-125 transition-transform">
+                    <BookOpen size={48} fill="currentColor" />
+                  </div>
+                  <BookOpen size={24} className="mb-3" />
+                  <h3 className="font-bold text-lg">Practice</h3>
+                  <p className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">Focused Study</p>
+                </button>
               </div>
 
-              <button 
-                onClick={() => startQuiz(preferredLevel, aiQuizEnabled)}
-                disabled={isGenerating}
-                className="w-full p-6 bg-slate-900 rounded-2xl text-white flex items-center gap-4 group hover:bg-indigo-950 transition-all disabled:opacity-50"
-              >
-                <div className="w-12 h-12 bg-indigo-500/20 rounded-xl flex items-center justify-center text-indigo-400 group-hover:scale-110 transition-transform">
-                  {isGenerating ? <Loader2 className="animate-spin" /> : <BrainCircuit size={24} />}
+              <section>
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-xs font-bold uppercase tracking-widest text-slate-400">Learning Path</h3>
+                  <button onClick={() => setView('settings')} className="text-[10px] font-bold text-indigo-600 uppercase">Change Level</button>
                 </div>
-                <div className="text-left">
-                  <h4 className="font-bold">Start Preferred Quiz</h4>
-                  <p className="text-xs text-slate-400">Level: {preferredLevel} • AI: {aiQuizEnabled ? 'On' : 'Off'}</p>
+                <div className="grid grid-cols-1 gap-3">
+                  {(['Beginner', 'Intermediate', 'Advanced', 'Expert'] as Level[]).map((lvl) => (
+                    <button
+                      key={lvl}
+                      onClick={() => startQuiz(lvl)}
+                      className={cn(
+                        "group relative p-4 bg-white border border-slate-100 rounded-2xl text-left transition-all duration-300",
+                        preferredLevel === lvl && "border-indigo-200 bg-indigo-50/30"
+                      )}
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <div className="flex items-center gap-2">
+                          <span className={cn(
+                            "w-2 h-2 rounded-full",
+                            lvl === 'Beginner' ? "bg-emerald-400" :
+                            lvl === 'Intermediate' ? "bg-amber-400" :
+                            lvl === 'Advanced' ? "bg-rose-400" :
+                            "bg-violet-400"
+                          )} />
+                          <h3 className="font-bold text-slate-800 text-sm">{lvl}</h3>
+                        </div>
+                        <span className="text-[10px] font-bold text-slate-400">{stats.levelProgress[lvl]}%</span>
+                      </div>
+                      <div className="h-1 w-full bg-slate-100 rounded-full overflow-hidden">
+                        <motion.div 
+                          initial={{ width: 0 }}
+                          animate={{ width: `${stats.levelProgress[lvl]}%` }}
+                          className={cn(
+                            "h-full rounded-full",
+                            lvl === 'Beginner' ? "bg-emerald-400" :
+                            lvl === 'Intermediate' ? "bg-amber-400" :
+                            lvl === 'Advanced' ? "bg-rose-400" :
+                            "bg-violet-400"
+                          )}
+                        />
+                      </div>
+                    </button>
+                  ))}
                 </div>
-              </button>
+              </section>
             </motion.div>
           )}
 
@@ -298,9 +415,14 @@ export default function App() {
                   <ArrowLeft size={20} />
                 </button>
                 <div className="text-center">
-                  <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Question</span>
-                  <p className="font-mono font-bold text-slate-800">
-                    {session.currentQuestionIndex + 1} <span className="text-slate-300">/</span> {session.questions.length}
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                    {session.mode === 'Blitz' ? 'Time Left' : 'Question'}
+                  </span>
+                  <p className={cn(
+                    "font-mono font-bold",
+                    session.mode === 'Blitz' && timeLeft !== null && timeLeft < 10 ? "text-rose-500 animate-pulse" : "text-slate-800"
+                  )}>
+                    {session.mode === 'Blitz' ? `${timeLeft}s` : `${session.currentQuestionIndex + 1} / ${session.questions.length}`}
                   </p>
                 </div>
                 <div className="w-10" />
@@ -322,6 +444,47 @@ export default function App() {
               </div>
 
               <div className="py-8">
+                {session.mode === 'Blitz' && (
+                  <div className="mb-6">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className={cn(
+                        "text-[10px] font-bold uppercase tracking-widest",
+                        (timeLeft || 0) < 5 ? "text-rose-500 animate-pulse" : "text-slate-400"
+                      )}>
+                        {(timeLeft || 0) < 5 ? "Hurry Up!" : "Time Remaining"}
+                      </span>
+                      <span className={cn(
+                        "font-mono font-bold text-xs",
+                        (timeLeft || 0) < 5 ? "text-rose-500" : "text-slate-600"
+                      )}>
+                        {timeLeft}s
+                      </span>
+                    </div>
+                    <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
+                      <motion.div 
+                        initial={{ width: '100%' }}
+                        animate={{ width: `${((timeLeft || 0) / 20) * 100}%` }}
+                        transition={{ duration: 0.3, ease: "linear" }}
+                        className={cn(
+                          "h-full rounded-full transition-colors duration-300",
+                          (timeLeft || 0) < 5 ? "bg-rose-500" : "bg-amber-400"
+                        )}
+                      />
+                    </div>
+                  </div>
+                )}
+                
+                {selectedOption === '' && (
+                  <motion.div 
+                    initial={{ opacity: 0, y: -10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="mb-4 p-2 bg-rose-50 text-rose-600 text-xs font-bold rounded-lg flex items-center gap-2"
+                  >
+                    <Zap size={14} />
+                    Time's Up! You missed this one.
+                  </motion.div>
+                )}
+
                 <span className="text-indigo-600 text-xs font-bold uppercase tracking-wider mb-2 block">
                   {session.questions[session.currentQuestionIndex].topic}
                 </span>
@@ -426,7 +589,9 @@ export default function App() {
               </div>
 
               <div>
-                <h2 className="text-2xl font-serif font-bold text-slate-800">Great effort!</h2>
+                <h2 className="text-2xl font-serif font-bold text-slate-800">
+                  {session.mode === 'Blitz' ? 'Blitz Complete!' : 'Great effort!'}
+                </h2>
                 <p className="text-slate-500 mt-2">
                   You got {session.score} out of {session.questions.length} questions correct.
                 </p>
@@ -442,6 +607,42 @@ export default function App() {
                   <p className="text-xl font-bold text-slate-800">
                     {Math.floor((Date.now() - session.startTime) / 1000)}s
                   </p>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <div className="flex items-center gap-3">
+                  <div className="h-px flex-1 bg-slate-100" />
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Share your score</span>
+                  <div className="h-px flex-1 bg-slate-100" />
+                </div>
+                <div className="flex justify-center gap-4">
+                  <button 
+                    onClick={shareOnTwitter}
+                    className="w-12 h-12 rounded-full bg-[#1DA1F2] text-white flex items-center justify-center shadow-lg shadow-blue-100 hover:scale-110 transition-transform"
+                  >
+                    <Twitter size={20} fill="currentColor" />
+                  </button>
+                  <button 
+                    onClick={shareOnFacebook}
+                    className="w-12 h-12 rounded-full bg-[#1877F2] text-white flex items-center justify-center shadow-lg shadow-blue-100 hover:scale-110 transition-transform"
+                  >
+                    <Facebook size={20} fill="currentColor" />
+                  </button>
+                  <button 
+                    onClick={() => {
+                      if (navigator.share) {
+                        navigator.share({
+                          title: 'Express Grammar AI',
+                          text: `I just scored ${Math.round((session.score / session.questions.length) * 100)}% on Express Grammar AI!`,
+                          url: window.location.href,
+                        });
+                      }
+                    }}
+                    className="w-12 h-12 rounded-full bg-slate-800 text-white flex items-center justify-center shadow-lg shadow-slate-200 hover:scale-110 transition-transform"
+                  >
+                    <Share2 size={20} />
+                  </button>
                 </div>
               </div>
 
@@ -578,7 +779,7 @@ export default function App() {
                   </div>
                   <div>
                     <h3 className="text-xl font-bold tracking-tight">Costa Simbine</h3>
-                    <p className="text-indigo-400 text-xs font-semibold uppercase tracking-widest mt-1">Elite Grammarian</p>
+                    <p className="text-indigo-400 text-xs font-semibold uppercase tracking-widest mt-1">{getPlayerTitle()}</p>
                     <div className="flex items-center gap-3 mt-3">
                       <div className="flex items-center gap-1 bg-white/10 px-2 py-1 rounded-md">
                         <Zap size={12} className="text-amber-400" fill="currentColor" />
@@ -586,7 +787,7 @@ export default function App() {
                       </div>
                       <div className="flex items-center gap-1 bg-white/10 px-2 py-1 rounded-md">
                         <Trophy size={12} className="text-indigo-400" />
-                        <span className="text-[10px] font-bold">Rank #1,248</span>
+                        <span className="text-[10px] font-bold">Rank #{getPlayerRank().toLocaleString()}</span>
                       </div>
                     </div>
                   </div>
@@ -639,21 +840,68 @@ export default function App() {
                                         achievement.icon === 'CheckCircle2' ? CheckCircle2 : 
                                         BookOpen;
                     return (
-                      <div 
+                      <motion.div 
                         key={achievement.id} 
+                        whileHover={{ scale: 1.05, y: -2 }}
+                        whileTap={{ scale: 0.95 }}
+                        initial={achievement.unlocked ? { scale: 0.9, opacity: 0 } : {}}
+                        animate={achievement.unlocked ? { scale: 1, opacity: 1 } : {}}
                         className={cn(
-                          "flex flex-col items-center gap-2 p-3 rounded-2xl transition-all",
-                          achievement.unlocked ? "bg-white border border-slate-100 shadow-sm" : "bg-slate-50 border border-dashed border-slate-200 opacity-40 grayscale"
+                          "flex flex-col items-center gap-2 p-3 rounded-2xl transition-all relative group",
+                          achievement.unlocked 
+                            ? "bg-white border border-slate-100 shadow-sm hover:shadow-indigo-100 hover:border-indigo-100" 
+                            : "bg-slate-50 border border-dashed border-slate-200 opacity-40 grayscale"
                         )}
                       >
+                        {achievement.unlocked && (
+                          <motion.div 
+                            animate={{ 
+                              opacity: [0.3, 0.6, 0.3],
+                              scale: [1, 1.1, 1],
+                            }}
+                            transition={{ 
+                              duration: 3, 
+                              repeat: Infinity,
+                              ease: "easeInOut"
+                            }}
+                            className="absolute inset-0 bg-linear-to-tr from-indigo-500/5 to-violet-500/5 rounded-2xl pointer-events-none"
+                          />
+                        )}
                         <div className={cn(
-                          "w-10 h-10 rounded-xl flex items-center justify-center",
+                          "w-10 h-10 rounded-xl flex items-center justify-center relative z-10",
                           achievement.unlocked ? "bg-indigo-50 text-indigo-600" : "bg-slate-100 text-slate-400"
                         )}>
-                          <IconComponent size={20} />
+                          <motion.div
+                            animate={achievement.unlocked ? {
+                              rotate: [0, -5, 5, -5, 0],
+                            } : {}}
+                            transition={{
+                              duration: 5,
+                              repeat: Infinity,
+                              repeatDelay: 2
+                            }}
+                          >
+                            <IconComponent size={20} />
+                          </motion.div>
+                          
+                          {achievement.unlocked && (
+                            <motion.div 
+                              initial={{ scale: 0 }}
+                              animate={{ scale: 1 }}
+                              className="absolute -top-1 -right-1 w-3 h-3 bg-emerald-500 rounded-full border-2 border-white shadow-sm"
+                            />
+                          )}
                         </div>
-                        <span className="text-[8px] font-bold text-slate-500 text-center leading-tight">{achievement.name}</span>
-                      </div>
+                        <span className="text-[8px] font-bold text-slate-500 text-center leading-tight relative z-10">{achievement.name}</span>
+                        
+                        {/* Tooltip-like description on hover */}
+                        <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 w-32 p-2 bg-slate-800 text-white text-[8px] rounded-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-20 text-center shadow-xl">
+                          <p className="font-bold mb-1">{achievement.name}</p>
+                          <p className="text-slate-300">{achievement.description}</p>
+                          {achievement.unlocked && <p className="text-emerald-400 mt-1">Unlocked: {achievement.date}</p>}
+                          <div className="absolute top-full left-1/2 -translate-x-1/2 border-8 border-transparent border-t-slate-800" />
+                        </div>
+                      </motion.div>
                     );
                   })}
                 </div>
